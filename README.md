@@ -1,6 +1,8 @@
-# tvbl-mcp-hub-go
+# jlab-mcp-otg
 
-Single-process Go replacement for the Cloudflare Worker + Durable Object hub.
+JupyterLab MCP hub, on-the-go: a single-process Go relay (drop-in replacement
+for the Cloudflare Worker + Durable Object hub) plus the JupyterLab extension
+in `extension/` that pairs with it (native JupyterLab and JupyterLite).
 
 ## Run
 
@@ -26,6 +28,56 @@ go build -o tvbl-hub .
 | POST | `/pair` | PoW + rate limit | `{label, nonce, solution}` → pair credentials |
 | POST | `/mcp/{pair}/{token}` | pair token (path or `Authorization: Bearer`) | MCP JSON-RPC 2.0, stateless |
 | GET | `/run?pair=` | pair token in first frame | runner WebSocket |
+
+## Exposing it publicly: recommended Caddyfile
+
+The hub trusts `X-Forwarded-For` for rate limiting, so it must sit behind a
+reverse proxy that overwrites that header (Caddy does). TLS also terminates
+at the proxy — the binary speaks plain HTTP.
+
+```caddy
+hub.example.com {
+    reverse_proxy 127.0.0.1:8787 {
+        header_up X-Real-IP {remote_host}
+    }
+
+    @pair {
+        path /pair /pair/challenge
+        method POST
+    }
+    handle @pair {
+        request_body {
+            max_size 16KiB
+        }
+        reverse_proxy 127.0.0.1:8787
+    }
+
+    @ws {
+        path /run /mcp/*
+    }
+    handle @ws {
+        request_body {
+            max_size 1MiB
+        }
+        reverse_proxy 127.0.0.1:8787 {
+            transport http {
+                read_timeout  0
+                write_timeout 0
+            }
+        }
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:8787
+    }
+}
+```
+
+Run the hub bound to localhost with a slightly higher PoW since it is public:
+
+```sh
+./tvbl-hub -listen 127.0.0.1:8787 -pow-bits 18 -runner-url https://hub.example.com
+```
 
 ## Wire contract (identical to the Worker)
 
@@ -60,7 +112,7 @@ hub's `recordResult` in the smoke test above (runner closed 1006 after
 only that one harness path needs a follow-up if you rely on slow-cell results
 from the fake runner.
 
-## Layout
+## Repo layout
 
-- Go hub: repo root (`main.go`, `hub-go` sources).
+- Go hub: repo root (`main.go` and friends).
 - Lab extension: `extension/`.
